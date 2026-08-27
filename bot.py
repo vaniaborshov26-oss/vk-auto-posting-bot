@@ -14,11 +14,11 @@ from PIL import Image
 # ============================================================
 
 # ОБЯЗАТЕЛЬНО ВСТАВЬ НОВЫЕ ПЕРЕВЫПУЩЕННЫЕ КЛЮЧИ
-TELEGRAM_BOT_TOKEN = ""
-GEMINI_API_KEY = ""
-VK_ACCESS_TOKEN = ""
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+VK_ACCESS_TOKEN = os.getenv("VK_ACCESS_TOKEN")
 
-VK_GROUP_ID = "240635290"
+VK_GROUP_ID = os.getenv("VK_GROUP_ID")
 
 # Сохраняем модель из твоего рабочего скрипта
 GEMINI_MODEL = "gemini-3.6-flash"
