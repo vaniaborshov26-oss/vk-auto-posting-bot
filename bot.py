@@ -14,9 +14,9 @@ from PIL import Image
 # ============================================================
 
 # ОБЯЗАТЕЛЬНО ВСТАВЬ НОВЫЕ ПЕРЕВЫПУЩЕННЫЕ КЛЮЧИ
-TELEGRAM_BOT_TOKEN = "8879421117:AAEIwaZy0Md6vvPJqRzjzYuS_Sg3SPUeiKA"
-GEMINI_API_KEY = "AQ.Ab8RN6JVP4ezCQ-9IgCEdOVzMVrhfQZwoVKom_v950fBOD0MZw"
-VK_ACCESS_TOKEN = "vk1.a.z0Ee0Bg1TDR16EYVXeCQMPwGKyoQeJp_ofHI9QbrSZJO9KUerGCjupKBNhwBgRKRzWFGz7Oz-NqtJyFpVjyDJu6EFyCPq3AkzZ05yWXrwooEjBUgA300Q_9wf2ixgZo9vy2NMYijPbNUqca0IGgxJqzbGcbhn-jKZSDW3oIcofGgQ7hkEqIlj7aFrPbjNd9Xd56hkyy2z93k8hfvpyz6qA"
+TELEGRAM_BOT_TOKEN = ""
+GEMINI_API_KEY = ""
+VK_ACCESS_TOKEN = ""
 
 VK_GROUP_ID = "240635290"
 
