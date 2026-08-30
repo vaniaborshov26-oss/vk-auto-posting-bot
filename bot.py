@@ -39,10 +39,12 @@ if not VK_GROUP_ID:
 # МОДЕЛИ
 # ============================================================
 
+# Текст / анализ / JSON / сравнение
 TEXT_MODEL = "gemini-3.6-flash"
 
 # Nano Banana Pro
 IMAGE_MODEL = "gemini-3-pro-image"
+
 
 # ============================================================
 # ПАРАМЕТРЫ
@@ -51,12 +53,13 @@ IMAGE_MODEL = "gemini-3-pro-image"
 GEMINI_TIMEOUT = 180
 VK_TIMEOUT = 120
 
+# Максимальное количество черновиков
 MAX_DRAFT_ATTEMPTS = 3
 
-# Минимальный балл для перехода к финальной генерации
+# Минимальное соответствие для перехода к 2K
 MATCH_THRESHOLD = 90
 
-# Пауза между повторными запросами
+# Паузы после временной ошибки
 RETRY_DELAYS = [3, 7, 15]
 
 
@@ -65,7 +68,10 @@ RETRY_DELAYS = [3, 7, 15]
 # ============================================================
 
 client = genai.Client(
-    api_key=GEMINI_API_KEY
+    api_key=GEMINI_API_KEY,
+    http_options=types.HttpOptions(
+        timeout=GEMINI_TIMEOUT * 1000
+    )
 )
 
 
@@ -86,7 +92,7 @@ bot = telebot.TeleBot(
 
 def clean_json_response(raw_text):
     """
-    Очищает ответ Gemini от markdown-обёртки.
+    Удаляет markdown-обёртку ```json ... ```
     """
 
     if not raw_text:
@@ -113,7 +119,7 @@ def clean_json_response(raw_text):
 
 def parse_json(text):
     """
-    Парсит JSON и выдаёт понятную ошибку.
+    Преобразование строки Gemini в Python dict.
     """
 
     cleaned = clean_json_response(text)
@@ -125,13 +131,13 @@ def parse_json(text):
 
         raise Exception(
             "Gemini вернул некорректный JSON.\n\n"
-            f"{cleaned[:5000]}"
+            f"{cleaned[:6000]}"
         ) from e
 
 
 def get_image_mime_type(image_bytes):
     """
-    Определяет MIME изображения через PIL.
+    Определяет MIME-тип изображения.
     """
 
     try:
@@ -140,7 +146,9 @@ def get_image_mime_type(image_bytes):
             io.BytesIO(image_bytes)
         )
 
-        fmt = (image.format or "JPEG").upper()
+        fmt = (
+            image.format or "JPEG"
+        ).upper()
 
         mapping = {
             "JPEG": "image/jpeg",
@@ -162,8 +170,8 @@ def get_image_mime_type(image_bytes):
 
 def normalize_image_for_ai(image_bytes):
     """
-    Приводит референс к JPEG.
-    Это уменьшает проблемы с WEBP/PNG и Telegram documents.
+    Преобразует входное изображение
+    в качественный JPEG.
     """
 
     try:
@@ -173,7 +181,7 @@ def normalize_image_for_ai(image_bytes):
         )
 
         print(
-            "[IMAGE] Исходный формат:",
+            "[IMAGE] Формат:",
             image.format
         )
 
@@ -195,7 +203,7 @@ def normalize_image_for_ai(image_bytes):
         result = buffer.getvalue()
 
         print(
-            "[IMAGE] Нормализованный JPEG:",
+            "[IMAGE] JPEG:",
             len(result),
             "байт"
         )
@@ -205,13 +213,13 @@ def normalize_image_for_ai(image_bytes):
     except Exception as e:
 
         raise Exception(
-            f"Не удалось подготовить изображение: {e}"
+            f"Ошибка обработки изображения: {e}"
         ) from e
 
 
 def get_aspect_ratio(image_bytes):
     """
-    Определяет примерное соотношение сторон.
+    Определяет ближайшее стандартное соотношение сторон.
     """
 
     try:
@@ -234,14 +242,17 @@ def get_aspect_ratio(image_bytes):
             "4:3": 1.3333,
             "3:2": 1.5,
             "16:9": 1.7778,
+            "21:9": 2.3333
         }
 
-        closest = min(
+        best = min(
             candidates.items(),
-            key=lambda item: abs(item[1] - ratio)
+            key=lambda item: abs(
+                item[1] - ratio
+            )
         )
 
-        return closest[0]
+        return best[0]
 
     except Exception:
 
@@ -259,12 +270,12 @@ def analyze_reference(image_bytes):
 Ты — профессиональный visual analyst и prompt engineer
 для фотореалистичной генерации изображений.
 
-Проанализируй прикреплённый референс максимально подробно.
+Проанализируй прикреплённое изображение максимально подробно.
 
 Главная задача:
 не придумать новое изображение,
 а восстановить максимально точное техническое описание
-того, ЧТО УЖЕ находится в референсе.
+того, что уже находится в референсе.
 
 Особенно внимательно анализируй:
 
@@ -272,7 +283,7 @@ def analyze_reference(image_bytes):
 2. Кадрирование.
 3. Соотношение сторон.
 4. Размер и положение главного объекта.
-5. Положение человека/людей.
+5. Положение человека или людей.
 6. Направление взгляда.
 7. Положение головы.
 8. Положение корпуса.
@@ -280,10 +291,10 @@ def analyze_reference(image_bytes):
 10. Положение пальцев.
 11. Положение ног.
 12. Причёску.
-13. Черты внешнего образа без выдумывания новых деталей.
+13. Выражение лица.
 14. Макияж.
 15. Одежду.
-16. Материалы и текстуры одежды.
+16. Материалы одежды.
 17. Аксессуары.
 18. Фон.
 19. Предметы вокруг.
@@ -297,106 +308,23 @@ def analyze_reference(image_bytes):
 27. Атмосферу.
 28. Предполагаемую камеру и объектив.
 29. Возможные параметры съёмки.
-30. Любой текст, логотипы или надписи на изображении.
+30. Текст, логотипы и надписи.
 
 Если точные параметры камеры неизвестны,
 укажи реалистичное предположение,
-но НЕ выдавай предположение за достоверный факт.
+но не выдавай предположение за достоверный факт.
 
-Если в изображении присутствует текст,
-обязательно укажи его содержание,
-язык, расположение и визуальное оформление.
+Если есть текст,
+обязательно укажи:
+- содержание;
+- язык;
+- расположение;
+- визуальный стиль текста.
+
+НЕ придумывай элементов,
+которых нет на изображении.
 
 Верни ТОЛЬКО JSON.
-
-Структура:
-
-{
-  "photo_title": "",
-  "composition": {
-    "aspect_ratio": "",
-    "shot_type": "",
-    "framing": "",
-    "camera_angle": "",
-    "subject_position": "",
-    "perspective": ""
-  },
-  "subject": {
-    "count": 0,
-    "description": "",
-    "position": "",
-    "scale_in_frame": ""
-  },
-  "face_and_expression": {
-    "head_position": "",
-    "gaze": "",
-    "expression": "",
-    "makeup": "",
-    "skin": ""
-  },
-  "hair": {
-    "color": "",
-    "length": "",
-    "style": "",
-    "details": ""
-  },
-  "outfit": {
-    "description": "",
-    "colors": "",
-    "materials": "",
-    "shoes": "",
-    "accessories": ""
-  },
-  "pose": {
-    "body": "",
-    "head": "",
-    "left_arm": "",
-    "right_arm": "",
-    "left_hand": "",
-    "right_hand": "",
-    "legs": "",
-    "feet": ""
-  },
-  "environment": {
-    "location": "",
-    "background": "",
-    "foreground": "",
-    "objects": ""
-  },
-  "lighting": {
-    "type": "",
-    "source": "",
-    "direction": "",
-    "hardness": "",
-    "shadows": "",
-    "rim_light": ""
-  },
-  "camera": {
-    "camera_type": "",
-    "lens": "",
-    "aperture": "",
-    "iso": "",
-    "shutter_speed": "",
-    "depth_of_field": ""
-  },
-  "color": {
-    "palette": "",
-    "grading": "",
-    "contrast": "",
-    "saturation": "",
-    "white_balance": ""
-  },
-  "text_in_image": {
-    "present": false,
-    "language": "",
-    "content": "",
-    "position": "",
-    "style": ""
-  },
-  "style": "",
-  "quality": "",
-  "hashtags": ""
-}
 """
 
     mime_type = get_image_mime_type(
@@ -415,18 +343,20 @@ def analyze_reference(image_bytes):
         try:
 
             print(
-                f"[Gemini 3.6] Анализ: "
+                f"[Gemini 3.6] Анализ "
                 f"{attempt + 1}/3"
             )
 
-            response = client.models.generate_content(
-                model=TEXT_MODEL,
-                contents=[
-                    image_part,
-                    prompt
-                ],
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json"
+            response = (
+                client.models.generate_content(
+                    model=TEXT_MODEL,
+                    contents=[
+                        image_part,
+                        prompt
+                    ],
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json"
+                    )
                 )
             )
 
@@ -435,7 +365,7 @@ def analyze_reference(image_bytes):
             )
 
             print(
-                "[Gemini 3.6] JSON анализа получен."
+                "[Gemini 3.6] Анализ готов."
             )
 
             return data
@@ -445,23 +375,24 @@ def analyze_reference(image_bytes):
             last_error = e
 
             print(
-                "[Gemini 3.6] Ошибка анализа:",
+                "[Gemini 3.6] Ошибка:",
                 e
             )
 
             if attempt < 2:
+
                 time.sleep(
                     RETRY_DELAYS[attempt]
                 )
 
     raise Exception(
-        f"Не удалось проанализировать референс: "
-        f"{last_error}"
+        "Не удалось получить анализ референса.\n"
+        f"Последняя ошибка: {last_error}"
     )
 
 
 # ============================================================
-# СТАНДАРТНЫЙ ПРОМПТ
+# ПОСТРОЕНИЕ СТАНДАРТНОГО ПРОМПТА
 # ============================================================
 
 def build_standard_prompt(data):
@@ -538,7 +469,7 @@ def build_standard_prompt(data):
 
 КЛЮЧЕВАЯ ЗАДАЧА:
 максимально точно воспроизвести референс,
-а не создать похожую сцену.
+а не создать просто похожую сцену.
 
 СЮЖЕТ:
 {data.get("photo_title", "")}
@@ -552,7 +483,7 @@ def build_standard_prompt(data):
 Перспектива: {composition.get("perspective", "")}
 
 ГЛАВНЫЙ ОБЪЕКТ:
-Количество объектов/людей: {subject.get("count", "")}
+Количество: {subject.get("count", "")}
 Описание: {subject.get("description", "")}
 Положение: {subject.get("position", "")}
 Размер в кадре: {subject.get("scale_in_frame", "")}
@@ -571,19 +502,11 @@ def build_standard_prompt(data):
 Детали: {hair.get("details", "")}
 
 ОДЕЖДА:
-{outfit.get("description", "")}
-
-Цвета одежды:
-{outfit.get("colors", "")}
-
-Материалы и фактура:
-{outfit.get("materials", "")}
-
-Обувь:
-{outfit.get("shoes", "")}
-
-Аксессуары:
-{outfit.get("accessories", "")}
+Описание: {outfit.get("description", "")}
+Цвета: {outfit.get("colors", "")}
+Материалы: {outfit.get("materials", "")}
+Обувь: {outfit.get("shoes", "")}
+Аксессуары: {outfit.get("accessories", "")}
 
 ПОЗА:
 Корпус: {pose.get("body", "")}
@@ -602,7 +525,7 @@ def build_standard_prompt(data):
 Предметы: {environment.get("objects", "")}
 
 ОСВЕЩЕНИЕ:
-Тип света: {lighting.get("type", "")}
+Тип: {lighting.get("type", "")}
 Источник: {lighting.get("source", "")}
 Направление: {lighting.get("direction", "")}
 Жёсткость: {lighting.get("hardness", "")}
@@ -610,7 +533,7 @@ def build_standard_prompt(data):
 Контровой свет: {lighting.get("rim_light", "")}
 
 КАМЕРА:
-Камера: {camera.get("camera_type", "")}
+Тип: {camera.get("camera_type", "")}
 Объектив: {camera.get("lens", "")}
 Диафрагма: {camera.get("aperture", "")}
 ISO: {camera.get("iso", "")}
@@ -625,29 +548,39 @@ ISO: {camera.get("iso", "")}
 Баланс белого: {color.get("white_balance", "")}
 
 ТЕКСТ НА ИЗОБРАЖЕНИИ:
-Наличие: {text_info.get("present", False)}
+Есть: {text_info.get("present", False)}
 Язык: {text_info.get("language", "")}
 Содержание: {text_info.get("content", "")}
 Положение: {text_info.get("position", "")}
-Стиль текста: {text_info.get("style", "")}
+Стиль: {text_info.get("style", "")}
 
-СТИЛЬ:
+ОБЩИЙ СТИЛЬ:
 {data.get("style", "")}
 
 КАЧЕСТВО:
 {data.get("quality", "")}
 
-Сохрани оригинальную композицию, геометрию,
-ракурс, кадрирование, расположение объектов,
-позу, освещение, фон, масштаб объекта в кадре
-и цветовую логику референса.
+СОХРАНИТЬ ОБЯЗАТЕЛЬНО:
+- исходную композицию;
+- исходное кадрирование;
+- исходный ракурс;
+- исходную перспективу;
+- положение объектов;
+- позу;
+- одежду;
+- фон;
+- освещение;
+- цветовую логику;
+- масштаб объекта в кадре.
 
-Не добавляй элементы, которых нет в референсе.
-Не удаляй важные элементы референса.
+Не добавляй элементы,
+которых нет на референсе.
+
+Не удаляй важные элементы.
 
 Максимальный фотореализм.
-Естественная анатомия.
 Реалистичная кожа.
+Естественная анатомия.
 Высокая детализация.
 Без CGI.
 Без мультяшности.
@@ -669,6 +602,10 @@ def generate_image_nano_banana(
     prompt,
     image_size="1K"
 ):
+    """
+    Nano Banana Pro.
+    Используем актуальный Interactions API.
+    """
 
     aspect_ratio = get_aspect_ratio(
         reference_bytes
@@ -678,46 +615,49 @@ def generate_image_nano_banana(
         reference_bytes
     )
 
-    image_part = types.Part.from_bytes(
-        data=reference_bytes,
-        mime_type=mime_type
+    encoded_reference = (
+        base64.b64encode(
+            reference_bytes
+        ).decode("utf-8")
     )
 
     generation_prompt = f"""
-Используй прикреплённое изображение как ГЛАВНЫЙ визуальный референс.
+Используй прикреплённое изображение
+как ГЛАВНЫЙ визуальный референс.
 
-Задача:
-создать новое изображение, которое максимально точно
-воспроизводит референс.
+Создай новое изображение,
+максимально точно воспроизводящее исходный референс.
 
-Не интерпретируй сцену свободно.
-Не меняй композицию без необходимости.
-Не меняй ракурс.
-Не меняй положение главного объекта.
-Не меняй позу.
-Не меняй одежду.
-Не меняй фон.
-Не меняй освещение.
-Не меняй цветовую логику.
+Главный приоритет:
+визуальное соответствие оригиналу.
 
-Особенно точно сохрани:
-- геометрию кадра;
-- положение тела;
-- положение головы;
-- руки и пальцы;
-- размеры объекта в кадре;
+Сохрани:
+- композицию;
 - кадрирование;
+- ракурс;
 - перспективу;
+- положение человека;
+- позу;
+- руки;
+- пальцы;
+- одежду;
+- волосы;
 - фон;
 - предметы;
-- свет;
-- цвет.
+- освещение;
+- тени;
+- цвет;
+- масштаб объекта.
 
-ИНСТРУКЦИЯ:
+Не добавляй новые предметы.
+Не удаляй важные предметы.
+Не меняй сцену без необходимости.
+
+ПРОМПТ:
 
 {prompt}
 
-Создай фотореалистичную фотографию.
+Создай максимально реалистичную фотографию.
 """
 
     last_error = None
@@ -728,57 +668,68 @@ def generate_image_nano_banana(
 
             print(
                 f"[Nano Banana Pro] "
-                f"Генерация {image_size}: "
-                f"{attempt + 1}/3"
+                f"{image_size}, "
+                f"попытка {attempt + 1}/3"
             )
 
-            response = client.models.generate_content(
-                model=IMAGE_MODEL,
-                contents=[
-                    image_part,
-                    generation_prompt
-                ],
-                config=types.GenerateContentConfig(
-                    response_modalities=["IMAGE"],
-                    response_format={
-                        "image": {
-                            "aspect_ratio": aspect_ratio,
-                            "image_size": image_size
+            interaction = (
+                client.interactions.create(
+                    model=IMAGE_MODEL,
+                    input=[
+                        {
+                            "type": "text",
+                            "text": generation_prompt
+                        },
+                        {
+                            "type": "image",
+                            "data": encoded_reference,
+                            "mime_type": mime_type
                         }
-                    }
+                    ],
+                    response_format={
+                        "type": "image",
+                        "mime_type": "image/jpeg",
+                        "aspect_ratio": aspect_ratio,
+                        "image_size": image_size
+                    },
+                    timeout=GEMINI_TIMEOUT
                 )
             )
 
-            for part in response.parts:
-
-                if part.inline_data:
-
-                    image = part.as_image()
-
-                    buffer = io.BytesIO()
-
-                    image.save(
-                        buffer,
-                        format="JPEG",
-                        quality=95
-                    )
-
-                    result = (
-                        buffer.getvalue()
-                    )
-
-                    print(
-                        "[Nano Banana Pro] "
-                        f"Получено изображение: "
-                        f"{len(result)} байт"
-                    )
-
-                    return result
-
-            raise Exception(
-                "Nano Banana Pro не вернул "
-                "изображение."
+            generated = (
+                interaction.output_image
             )
+
+            if not generated:
+                raise Exception(
+                    "Nano Banana Pro "
+                    "не вернул output_image."
+                )
+
+            if not generated.data:
+                raise Exception(
+                    "Nano Banana Pro "
+                    "вернул пустые данные изображения."
+                )
+
+            image_bytes = (
+                base64.b64decode(
+                    generated.data
+                )
+            )
+
+            if not image_bytes:
+                raise Exception(
+                    "Получено пустое изображение."
+                )
+
+            print(
+                "[Nano Banana Pro] "
+                f"Изображение получено: "
+                f"{len(image_bytes)} байт"
+            )
+
+            return image_bytes
 
         except Exception as e:
 
@@ -790,19 +741,21 @@ def generate_image_nano_banana(
             )
 
             if attempt < 2:
+
                 time.sleep(
                     RETRY_DELAYS[attempt]
                 )
 
     raise Exception(
-        "Nano Banana Pro не смог "
-        f"создать изображение: {last_error}"
+        "Nano Banana Pro не смог создать "
+        f"изображение.\n"
+        f"Последняя ошибка: {last_error}"
     )
 
 
 # ============================================================
 # GEMINI 3.6
-# ПРОВЕРКА РЕЗУЛЬТАТА
+# СРАВНЕНИЕ РЕФЕРЕНСА И ЧЕРНОВИКА
 # ============================================================
 
 def compare_reference_and_draft(
@@ -829,28 +782,25 @@ def compare_reference_and_draft(
         mime_type=draft_mime
     )
 
-    prompt = f"""
+    comparison_prompt = f"""
 Ты — эксперт по визуальному контролю качества
 AI-generated изображений.
 
-Ниже два изображения:
+IMAGE 1 = ОРИГИНАЛЬНЫЙ РЕФЕРЕНС.
+IMAGE 2 = СГЕНЕРИРОВАННЫЙ ЧЕРНОВИК.
 
-IMAGE 1 = ОРИГИНАЛЬНЫЙ РЕФЕРЕНС
-IMAGE 2 = СГЕНЕРИРОВАННЫЙ РЕЗУЛЬТАТ
+Сравни изображения.
 
-Сравни их именно как изображения,
-а не как художественные произведения.
+Главная задача:
+понять, насколько IMAGE 2 воспроизводит IMAGE 1.
 
-Главная цель —
-определить, насколько IMAGE 2 воспроизводит IMAGE 1.
-
-Проверь:
+Оцени:
 
 1. Общую композицию.
 2. Кадрирование.
 3. Соотношение сторон.
 4. Положение главного объекта.
-5. Масштаб объекта.
+5. Размер объекта в кадре.
 6. Ракурс.
 7. Перспективу.
 8. Положение головы.
@@ -867,47 +817,44 @@ IMAGE 2 = СГЕНЕРИРОВАННЫЙ РЕЗУЛЬТАТ
 19. Тени.
 20. Цветовую палитру.
 21. Цветокоррекцию.
-22. Текст/логотипы.
-23. Общую геометрию сцены.
+22. Текст и логотипы.
+23. Общую геометрию.
 
-Важно:
-не штрафуй результат за естественные микроскопические
-отличия деталей, если композиция и смысл сцены совпадают.
+Не штрафуй за микроскопические различия,
+если главная композиция и сцена совпадают.
 
 Верни строго JSON:
 
 {{
-  "overall_score": 0,
-  "composition_score": 0,
-  "framing_score": 0,
-  "pose_score": 0,
-  "clothing_score": 0,
-  "background_score": 0,
-  "lighting_score": 0,
-  "color_score": 0,
-  "detail_score": 0,
-  "errors": [],
-  "corrections": [],
-  "improved_prompt": ""
+    "overall_score": 0,
+    "composition_score": 0,
+    "framing_score": 0,
+    "pose_score": 0,
+    "clothing_score": 0,
+    "background_score": 0,
+    "lighting_score": 0,
+    "color_score": 0,
+    "detail_score": 0,
+    "errors": [],
+    "corrections": [],
+    "improved_prompt": ""
 }}
 
-Шкала каждого показателя:
-0-100.
+Каждая оценка от 0 до 100.
 
 overall_score:
-общая оценка воспроизведения референса.
+общая степень визуального соответствия.
 
 errors:
 только реально заметные расхождения.
 
 corrections:
-конкретные инструкции, что изменить
-в следующей генерации.
+точные исправления.
 
 improved_prompt:
 полный обновлённый промпт.
-Сохрани в нём все уже правильные элементы
-и измени только то, что необходимо.
+Не удаляй уже правильные детали.
+Исправляй только найденные несоответствия.
 
 ТЕКУЩИЙ ПРОМПТ:
 
@@ -921,20 +868,21 @@ improved_prompt:
         try:
 
             print(
-                f"[Gemini 3.6] "
-                f"Проверка результата "
+                f"[Gemini 3.6] Проверка "
                 f"{attempt + 1}/3"
             )
 
-            response = client.models.generate_content(
-                model=TEXT_MODEL,
-                contents=[
-                    reference_part,
-                    draft_part,
-                    prompt
-                ],
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json"
+            response = (
+                client.models.generate_content(
+                    model=TEXT_MODEL,
+                    contents=[
+                        reference_part,
+                        draft_part,
+                        comparison_prompt
+                    ],
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json"
+                    )
                 )
             )
 
@@ -944,6 +892,7 @@ improved_prompt:
 
             print(
                 "[Gemini 3.6] "
+                "Проверка завершена. "
                 f"Оценка: "
                 f"{result.get('overall_score')}"
             )
@@ -965,8 +914,8 @@ improved_prompt:
                 )
 
     raise Exception(
-        f"Не удалось проверить результат: "
-        f"{last_error}"
+        "Не удалось проверить "
+        f"черновик: {last_error}"
     )
 
 
@@ -980,6 +929,7 @@ def safe_json_response(
 ):
 
     try:
+
         return response.json()
 
     except ValueError:
@@ -987,7 +937,8 @@ def safe_json_response(
         raise Exception(
             f"{source_name} вернул не JSON.\n"
             f"HTTP: {response.status_code}\n"
-            f"Ответ: {response.text[:3000]}"
+            f"Ответ:\n"
+            f"{response.text[:3000]}"
         )
 
 
@@ -1033,11 +984,16 @@ def vk_call(
             f"VK timeout в {clean_method}"
         )
 
+    except requests.exceptions.ConnectionError as e:
+
+        raise Exception(
+            f"Ошибка соединения с VK: {e}"
+        )
+
     except requests.exceptions.RequestException as e:
 
         raise Exception(
-            f"Ошибка HTTP VK "
-            f"{clean_method}: {e}"
+            f"HTTP ошибка VK: {e}"
         )
 
     return safe_json_response(
@@ -1047,7 +1003,7 @@ def vk_call(
 
 
 # ============================================================
-# VK POST
+# VK: ПУБЛИКАЦИЯ
 # ============================================================
 
 def post_to_vk(
@@ -1057,12 +1013,19 @@ def post_to_vk(
 ):
 
     group_id = int(
-        str(VK_GROUP_ID).replace("-", "")
+        str(VK_GROUP_ID).replace(
+            "-",
+            ""
+        )
     )
 
     # --------------------------------------------------------
-    # 1. upload server
+    # 1. Получаем upload_url
     # --------------------------------------------------------
+
+    print(
+        "[VK] Получаю upload_url..."
+    )
 
     server_res = vk_call(
         "photos.getWallUploadServer",
@@ -1073,10 +1036,15 @@ def post_to_vk(
         }
     )
 
+    print(
+        "[VK] getWallUploadServer:",
+        server_res
+    )
+
     if "error" in server_res:
 
         raise Exception(
-            "VK getWallUploadServer: "
+            f"VK getWallUploadServer: "
             f"{server_res['error']}"
         )
 
@@ -1095,7 +1063,7 @@ def post_to_vk(
     )
 
     # --------------------------------------------------------
-    # 2. upload photo
+    # 2. Загружаем фотографию
     # --------------------------------------------------------
 
     files = {
@@ -1105,6 +1073,10 @@ def post_to_vk(
             "image/jpeg"
         )
     }
+
+    print(
+        "[VK] Загружаю изображение..."
+    )
 
     try:
 
@@ -1117,7 +1089,7 @@ def post_to_vk(
     except requests.exceptions.Timeout:
 
         raise Exception(
-            "VK upload timeout"
+            "VK upload timeout."
         )
 
     except requests.exceptions.RequestException as e:
@@ -1132,7 +1104,7 @@ def post_to_vk(
     )
 
     print(
-        "[VK] Upload:",
+        "[VK] Upload response:",
         upload_res
     )
 
@@ -1156,14 +1128,16 @@ def post_to_vk(
     )
 
     if not server:
+
         raise Exception(
-            f"VK upload не вернул server:\n"
+            "VK upload не вернул server:\n"
             f"{upload_res}"
         )
 
     if not vk_hash:
+
         raise Exception(
-            f"VK upload не вернул hash:\n"
+            "VK upload не вернул hash:\n"
             f"{upload_res}"
         )
 
@@ -1176,13 +1150,17 @@ def post_to_vk(
     ):
 
         raise Exception(
-            "VK upload не вернул корректный photo.\n"
-            f"Ответ:\n{upload_res}"
+            "VK upload не вернул корректный photo.\n\n"
+            f"Ответ VK:\n{upload_res}"
         )
 
     # --------------------------------------------------------
-    # 3. save photo
+    # 3. Save photo
     # --------------------------------------------------------
+
+    print(
+        "[VK] Сохраняю фотографию..."
+    )
 
     save_res = vk_call(
         "photos.saveWallPhoto",
@@ -1214,13 +1192,13 @@ def post_to_vk(
             save_res["response"][0]
         )
 
-        owner_id = photo_info[
-            "owner_id"
-        ]
+        owner_id = (
+            photo_info["owner_id"]
+        )
 
-        photo_id = photo_info[
-            "id"
-        ]
+        photo_id = (
+            photo_info["id"]
+        )
 
     except Exception as e:
 
@@ -1233,6 +1211,10 @@ def post_to_vk(
     # --------------------------------------------------------
     # 4. wall.post
     # --------------------------------------------------------
+
+    print(
+        "[VK] Публикую пост..."
+    )
 
     post_res = vk_call(
         "wall.post",
@@ -1260,13 +1242,27 @@ def post_to_vk(
             f"{post_res['error']}"
         )
 
+    if (
+        "response" not in post_res
+        or "post_id" not in post_res["response"]
+    ):
+
+        raise Exception(
+            "VK не вернул post_id:\n"
+            f"{post_res}"
+        )
+
     post_id = (
         post_res["response"]["post_id"]
     )
 
     # --------------------------------------------------------
-    # 5. comment
+    # 5. Комментарий
     # --------------------------------------------------------
+
+    print(
+        "[VK] Публикую промпт..."
+    )
 
     comment_res = vk_call(
         "wall.createComment",
@@ -1283,8 +1279,16 @@ def post_to_vk(
     if "error" in comment_res:
 
         print(
-            "[VK] Повтор комментария "
-            "с from_group=1"
+            "[VK] Первая попытка комментария "
+            "не удалась:"
+        )
+
+        print(
+            comment_res
+        )
+
+        print(
+            "[VK] Пробую from_group=1..."
         )
 
         comment_res = vk_call(
@@ -1309,8 +1313,7 @@ def post_to_vk(
     else:
 
         print(
-            "✅ Промпт опубликован "
-            "в комментарии."
+            "✅ Промпт опубликован."
         )
 
     return (
@@ -1320,7 +1323,49 @@ def post_to_vk(
 
 
 # ============================================================
-# TELEGRAM START
+# ПОСТ VK
+# ============================================================
+
+def build_wall_post_text(data):
+
+    title = data.get(
+        "photo_title",
+        "Нейрофотосессия"
+    )
+
+    hashtags = data.get(
+        "hashtags",
+        "#нейрофото #промпт #нейросеть"
+    )
+
+    return f"""✨ {title}
+
+ИНСТРУКЦИЯ
+
+КАК СОЗДАТЬ ФОТО С ПОМОЩЬЮ БОТОВ 🖤
+
+🔹 БОТ 1 ВК — GPTron Nano Banana Pro 🍌✅
+1️⃣ Переходим в бот:
+https://vk.com/write-236453790?ref=pp53aacd7d52
+
+🔹 БОТ 2 ВК — Lexy Nano Banana Pro 🍌✅
+Переходим в бот:
+https://vk.com/write-233546714?ref=84372609_add
+
+Отправляем своё фото.
+
+Перед отправкой вставляем нужный промт из комментария.
+
+❗ Промт можно и нужно менять под себя:
+цвет волос, глаз, одежду, позу, настроение и т.д.
+
+👇 Забирай готовый промпт для генерации в комментариях к этому посту!
+
+{hashtags}"""
+
+
+# ============================================================
+# TELEGRAM / START
 # ============================================================
 
 @bot.message_handler(
@@ -1337,7 +1382,7 @@ def send_welcome(message):
         "2️⃣ Создам JSON-анализ\n"
         "3️⃣ Сформирую стандартный промпт\n"
         "4️⃣ Создам черновик Nano Banana Pro 1K\n"
-        "5️⃣ Проверю его на соответствие\n"
+        "5️⃣ Проверю точность\n"
         "6️⃣ При необходимости исправлю промпт\n"
         "7️⃣ Создам финал Nano Banana Pro 2K\n"
         "8️⃣ Опубликую результат в VK"
@@ -1345,7 +1390,7 @@ def send_welcome(message):
 
 
 # ============================================================
-# TELEGRAM PHOTO HANDLER
+# TELEGRAM / ФОТО
 # ============================================================
 
 @bot.message_handler(
@@ -1359,13 +1404,13 @@ def handle_photo(message):
     status_msg = bot.reply_to(
         message,
         "⏳ Получил референс.\n"
-        "Начинаю глубокий анализ..."
+        "Начинаю анализ..."
     )
 
     try:
 
         # ----------------------------------------------------
-        # 1. Telegram file_id
+        # 1. Получаем Telegram file_id
         # ----------------------------------------------------
 
         if message.photo:
@@ -1383,12 +1428,16 @@ def handle_photo(message):
         else:
 
             raise Exception(
-                "Фотография не найдена."
+                "Фото не найдено."
             )
 
         # ----------------------------------------------------
-        # 2. Download
+        # 2. Скачать
         # ----------------------------------------------------
+
+        print(
+            "[Telegram] Скачиваю изображение..."
+        )
 
         file_info = bot.get_file(
             file_id
@@ -1404,7 +1453,7 @@ def handle_photo(message):
 
             raise Exception(
                 "Не удалось скачать "
-                "фото из Telegram."
+                "изображение."
             )
 
         print(
@@ -1428,8 +1477,8 @@ def handle_photo(message):
         # ----------------------------------------------------
 
         bot.edit_message_text(
-            "🔍 Анализирую референс через "
-            "Gemini 3.6 Flash...",
+            "🔍 Анализирую референс "
+            "через Gemini 3.6 Flash...",
             chat_id=message.chat.id,
             message_id=status_msg.message_id
         )
@@ -1441,7 +1490,10 @@ def handle_photo(message):
         )
 
         print(
-            "[SYSTEM] JSON анализа:\n",
+            "[SYSTEM] JSON получен:"
+        )
+
+        print(
             json.dumps(
                 analysis_json,
                 ensure_ascii=False,
@@ -1467,7 +1519,7 @@ def handle_photo(message):
         )
 
         # ----------------------------------------------------
-        # 6. Отправляем JSON пользователю
+        # 6. Показываем JSON
         # ----------------------------------------------------
 
         json_text = json.dumps(
@@ -1476,7 +1528,6 @@ def handle_photo(message):
             indent=2
         )
 
-        # Telegram message limit
         if len(json_text) <= 3900:
 
             bot.send_message(
@@ -1485,8 +1536,16 @@ def handle_photo(message):
                 f"{json_text}"
             )
 
+        else:
+
+            bot.send_message(
+                message.chat.id,
+                "📦 JSON-анализ создан.\n"
+                "Полный JSON сохранён в логах Bothost."
+            )
+
         # ----------------------------------------------------
-        # 7. Отправляем текущий промпт
+        # 7. Показываем промпт
         # ----------------------------------------------------
 
         if len(current_prompt) <= 3900:
@@ -1503,7 +1562,9 @@ def handle_photo(message):
 
         successful_draft = None
         successful_check = None
-        successful_prompt = current_prompt
+        successful_prompt = (
+            current_prompt
+        )
 
         for draft_number in range(
             1,
@@ -1513,11 +1574,16 @@ def handle_photo(message):
             bot.edit_message_text(
                 f"🎨 Создаю черновик "
                 f"Nano Banana Pro 1K...\n\n"
-                f"Попытка: "
-                f"{draft_number}/{MAX_DRAFT_ATTEMPTS}",
+                f"Попытка "
+                f"{draft_number}/"
+                f"{MAX_DRAFT_ATTEMPTS}",
                 chat_id=message.chat.id,
                 message_id=status_msg.message_id
             )
+
+            # ------------------------------------------------
+            # Generate 1K
+            # ------------------------------------------------
 
             draft_bytes = (
                 generate_image_nano_banana(
@@ -1528,25 +1594,25 @@ def handle_photo(message):
             )
 
             # ------------------------------------------------
-            # Отправляем черновик пользователю
+            # Отправляем черновик в Telegram
             # ------------------------------------------------
 
             bot.send_photo(
                 message.chat.id,
                 draft_bytes,
                 caption=(
-                    f"🖼 Черновик 1K — "
-                    f"попытка {draft_number}"
+                    f"🖼 Черновик 1K\n"
+                    f"Попытка {draft_number}"
                 )
             )
 
             # ------------------------------------------------
-            # CHECK
+            # Проверяем
             # ------------------------------------------------
 
             bot.edit_message_text(
-                f"🔎 Проверяю точность "
-                f"черновика {draft_number}...",
+                f"🔎 Проверяю черновик "
+                f"{draft_number}...",
                 chat_id=message.chat.id,
                 message_id=status_msg.message_id
             )
@@ -1560,7 +1626,10 @@ def handle_photo(message):
             )
 
             print(
-                "[CHECK]",
+                "[CHECK]"
+            )
+
+            print(
                 json.dumps(
                     check_result,
                     ensure_ascii=False,
@@ -1575,11 +1644,14 @@ def handle_photo(message):
                 )
             )
 
+            # ------------------------------------------------
+            # Отчёт
+            # ------------------------------------------------
+
             bot.send_message(
                 message.chat.id,
-                "📊 Проверка черновика\n\n"
-                f"Общее соответствие: "
-                f"{score}/100\n\n"
+                "📊 Результат проверки\n\n"
+                f"Общее: {score}/100\n"
                 f"Композиция: "
                 f"{check_result.get('composition_score', 0)}/100\n"
                 f"Кадрирование: "
@@ -1597,30 +1669,40 @@ def handle_photo(message):
             )
 
             # ------------------------------------------------
-            # УСПЕШНЫЙ РЕЗУЛЬТАТ
+            # УСПЕХ
             # ------------------------------------------------
 
             if score >= MATCH_THRESHOLD:
 
-                successful_draft = draft_bytes
-                successful_check = check_result
-                successful_prompt = current_prompt
+                successful_draft = (
+                    draft_bytes
+                )
+
+                successful_check = (
+                    check_result
+                )
+
+                successful_prompt = (
+                    current_prompt
+                )
 
                 print(
-                    f"[SYSTEM] Прошёл порог: "
+                    f"[SYSTEM] "
+                    f"Черновик принят: "
                     f"{score}/100"
                 )
 
                 break
 
             # ------------------------------------------------
-            # НЕ УСПЕЛ
+            # НЕУДАЧА
             # ------------------------------------------------
 
             if draft_number < MAX_DRAFT_ATTEMPTS:
 
                 improved_prompt = (
-                    check_result.get(
+                    check_result
+                    .get(
                         "improved_prompt",
                         ""
                     )
@@ -1642,49 +1724,52 @@ def handle_photo(message):
                         )
                     )
 
-                    correction_text = "\n".join(
-                        f"- {item}"
-                        for item in corrections
+                    correction_text = (
+                        "\n".join(
+                            f"- {item}"
+                            for item in corrections
+                        )
                     )
 
                     current_prompt = (
                         current_prompt
                         + "\n\n"
-                        "КРИТИЧЕСКИЕ ИСПРАВЛЕНИЯ "
-                        "ДЛЯ СЛЕДУЮЩЕЙ ГЕНЕРАЦИИ:\n"
+                        "КРИТИЧЕСКИЕ "
+                        "ИСПРАВЛЕНИЯ:\n"
                         + correction_text
                     )
 
                 bot.send_message(
                     message.chat.id,
-                    "🔄 Результат недостаточно точный.\n\n"
-                    f"Соответствие: {score}/100\n"
-                    "Исправляю промпт и создаю "
-                    "следующий черновик."
+                    "🔄 Соответствие недостаточное.\n\n"
+                    f"Результат: {score}/100\n"
+                    "Исправляю промпт и "
+                    "создаю следующий черновик."
                 )
 
         # ====================================================
-        # ЕСЛИ НЕ ДОСТИГЛИ ПОРОГА
+        # НЕ ПРОШЁЛ ПРОВЕРКУ
         # ====================================================
 
         if successful_draft is None:
 
             bot.edit_message_text(
-                "⚠️ Не удалось достичь "
-                f"порога {MATCH_THRESHOLD}/100 "
-                "за 3 попытки.\n\n"
-                "Финальный 2K не публикую, "
-                "чтобы не отправлять в VK "
-                "неточный результат.",
+                f"⚠️ Не удалось достичь "
+                f"{MATCH_THRESHOLD}/100 "
+                f"за {MAX_DRAFT_ATTEMPTS} попытки.\n\n"
+                "Финальный 2K не создаю "
+                "и в VK не публикую.",
                 chat_id=message.chat.id,
                 message_id=status_msg.message_id
             )
 
-            bot.send_message(
-                message.chat.id,
-                "💡 Последний промпт:\n\n"
-                f"{current_prompt}"
-            )
+            if len(current_prompt) <= 3900:
+
+                bot.send_message(
+                    message.chat.id,
+                    "📝 Последний вариант промпта:\n\n"
+                    f"{current_prompt}"
+                )
 
             return
 
@@ -1692,10 +1777,17 @@ def handle_photo(message):
         # FINAL 2K
         # ====================================================
 
+        final_score = (
+            successful_check.get(
+                "overall_score",
+                0
+            )
+        )
+
         bot.edit_message_text(
-            "✅ Черновик прошёл проверку.\n\n"
+            "✅ Черновик принят.\n\n"
             f"Соответствие: "
-            f"{successful_check.get('overall_score')}/100\n\n"
+            f"{final_score}/100\n\n"
             "🍌 Создаю финальное изображение "
             "Nano Banana Pro 2K...",
             chat_id=message.chat.id,
@@ -1711,34 +1803,36 @@ def handle_photo(message):
         )
 
         # ----------------------------------------------------
-        # Отправляем финал пользователю
+        # Отправляем финальный результат
         # ----------------------------------------------------
 
         bot.send_photo(
             message.chat.id,
             final_bytes,
             caption=(
-                "✅ Финальное изображение "
-                "Nano Banana Pro 2K"
+                "✅ Финал Nano Banana Pro 2K\n"
+                f"Проверка черновика: "
+                f"{final_score}/100"
             )
         )
 
-        # ----------------------------------------------------
-        # Пост VK
-        # ----------------------------------------------------
+        # ====================================================
+        # VK
+        # ====================================================
 
-        wall_text = build_wall_post_text(
-            analysis_json
+        wall_text = (
+            build_wall_post_text(
+                analysis_json
+            )
         )
 
-        # Для VK комментария используем финальный промпт
         comment_text = (
             "📌 Промпт для генерации:\n\n"
             + successful_prompt
         )
 
         bot.edit_message_text(
-            "🚀 Финал 2K готов.\n\n"
+            "🚀 Финал готов.\n\n"
             "Публикую изображение "
             "и промпт в VK...",
             chat_id=message.chat.id,
@@ -1751,19 +1845,19 @@ def handle_photo(message):
             comment_text
         )
 
-        # ----------------------------------------------------
-        # Успешное завершение
-        # ----------------------------------------------------
+        # ====================================================
+        # ГОТОВО
+        # ====================================================
 
         bot.edit_message_text(
             "🎉 Готово!\n\n"
             "✅ Референс проанализирован\n"
             "✅ JSON создан\n"
-            "✅ Промпт создан\n"
-            "✅ Черновик 1K проверен\n"
+            "✅ Стандартный промпт создан\n"
+            "✅ Черновик 1K создан\n"
+            f"✅ Проверка: {final_score}/100\n"
             "✅ Финал 2K создан\n"
-            "✅ Пост опубликован в VK\n"
-            "✅ Промпт добавлен в комментарий\n\n"
+            "✅ Опубликовано в VK\n\n"
             f"🔗 {post_link}",
             chat_id=message.chat.id,
             message_id=status_msg.message_id
@@ -1807,48 +1901,6 @@ def handle_photo(message):
 
 
 # ============================================================
-# WALL POST TEXT
-# ============================================================
-
-def build_wall_post_text(data):
-
-    title = data.get(
-        "photo_title",
-        "Нейрофотосессия"
-    )
-
-    hashtags = data.get(
-        "hashtags",
-        "#нейрофото #промпт #нейросеть"
-    )
-
-    return f"""✨ {title}
-
-ИНСТРУКЦИЯ
-
-КАК СОЗДАТЬ ФОТО С ПОМОЩЬЮ БОТОВ 🖤🖤🖤🖤
-
-🔹 БОТ 1 ВК — GPTron Nano Banana Pro🍌✅
-1️⃣ Переходим в бот ➡️https://vk.com/write-236453790?ref=pp53aacd7d52
-
-🔹 БОТ 2 ВК — Lexy Nano Banana Pro🍌✅
-Переходим в бот ➡️https://vk.com/write-233546714?ref=84372609_add
-
-Отправляем своё фото.
-
-Перед отправкой вставляем нужный промт в комментариях.
-
-ВАЖНО ПРОЧИТАТЬ
-
-❗ Промт всегда можно и нужно менять под себя:
-цвет волос, глаз, одежду, позу, настроение и т.д.
-
-👇 Забирай готовый промпт для генерации в комментариях к этому посту!
-
-{hashtags}"""
-
-
-# ============================================================
 # ЗАПУСК
 # ============================================================
 
@@ -1861,19 +1913,26 @@ print(
 )
 
 print(
-    f"Gemini Text: {TEXT_MODEL}"
+    f"Text model: {TEXT_MODEL}"
 )
 
 print(
-    f"Nano Banana Pro: {IMAGE_MODEL}"
+    f"Image model: {IMAGE_MODEL}"
 )
 
 print(
-    f"VK API: 5.131"
+    f"Gemini timeout: "
+    f"{GEMINI_TIMEOUT} сек."
 )
 
 print(
-    f"Match threshold: {MATCH_THRESHOLD}"
+    f"VK timeout: "
+    f"{VK_TIMEOUT} сек."
+)
+
+print(
+    f"Порог соответствия: "
+    f"{MATCH_THRESHOLD}/100"
 )
 
 print(
@@ -1889,35 +1948,31 @@ print(
 # TELEGRAM POLLING
 # ============================================================
 
-def start_telegram_polling():
+while True:
 
-    while True:
+    try:
 
-        try:
+        print(
+            "📡 Подключение к Telegram..."
+        )
 
-            print(
-                "📡 Telegram polling запускается..."
-            )
+        bot.infinity_polling(
+            timeout=30,
+            long_polling_timeout=30,
+            skip_pending=True,
+            allowed_updates=["message"]
+        )
 
-            bot.infinity_polling(
-                timeout=30,
-                long_polling_timeout=30,
-                skip_pending=True,
-                allowed_updates=["message"]
-            )
+    except Exception as e:
 
-        except Exception as e:
+        print(
+            "[Telegram] Ошибка polling:",
+            e
+        )
 
-            print(
-                f"⚠️ Telegram API error: {e}"
-            )
+        print(
+            "🔄 Повторное подключение "
+            "через 5 секунд..."
+        )
 
-            print(
-                "🔄 Повторное подключение "
-                "через 5 секунд..."
-            )
-
-            time.sleep(5)
-
-
-start_telegram_polling()
+        time.sleep(5)
