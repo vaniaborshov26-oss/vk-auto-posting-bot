@@ -1889,21 +1889,35 @@ print(
 # TELEGRAM POLLING
 # ============================================================
 
-while True:
+def start_telegram_polling():
 
-    try:
+    while True:
 
-        bot.infinity_polling(
-            timeout=120,
-            long_polling_timeout=120,
-            skip_pending=True
-        )
+        try:
 
-    except Exception as e:
+            print(
+                "📡 Telegram polling запускается..."
+            )
 
-        print(
-            "[Telegram] Ошибка polling:",
-            e
-        )
+            bot.infinity_polling(
+                timeout=30,
+                long_polling_timeout=30,
+                skip_pending=True,
+                allowed_updates=["message"]
+            )
 
-        time.sleep(5)
+        except Exception as e:
+
+            print(
+                f"⚠️ Telegram API error: {e}"
+            )
+
+            print(
+                "🔄 Повторное подключение "
+                "через 5 секунд..."
+            )
+
+            time.sleep(5)
+
+
+start_telegram_polling()
