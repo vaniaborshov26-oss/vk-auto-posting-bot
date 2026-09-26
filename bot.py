@@ -282,3 +282,4 @@ def handle_photo(message):
 if __name__ == "__main__":
     print(f"🤖 Бот запущен. TEXT_MODEL={TEXT_MODEL}")
     bot.infinity_polling(skip_pending=True)
+
